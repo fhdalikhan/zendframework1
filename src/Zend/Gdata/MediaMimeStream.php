@@ -1,0 +1,187 @@
+<?php
+
+/**
+ * Zend Framework.
+ *
+ * LICENSE
+ *
+ * This source file is subject to the new BSD license that is bundled
+ * with this package in the file LICENSE.txt.
+ * It is also available through the world-wide-web at this URL:
+ * http://framework.zend.com/license/new-bsd
+ * If you did not receive a copy of the license and are unable to
+ * obtain it through the world-wide-web, please send an email
+ * to license@zend.com so we can send you a copy immediately.
+ *
+ * @category   Zend
+ *
+ * @copyright  Copyright (c) 2005-2015 Zend Technologies USA Inc. (http://www.zend.com)
+ * @license    http://framework.zend.com/license/new-bsd     New BSD License
+ *
+ * @version    $Id$
+ */
+
+/**
+ *  @see Zend_Gdata_MimeFile
+ */
+// require_once 'Zend/Gdata/MimeFile.php';
+
+/**
+ * @see Zend_Gdata_MimeBodyString
+ */
+// require_once 'Zend/Gdata/MimeBodyString.php';
+
+/**
+ * A streaming Media MIME class that allows for buffered read operations.
+ *
+ * @category   Zend
+ *
+ * @copyright  Copyright (c) 2005-2015 Zend Technologies USA Inc. (http://www.zend.com)
+ * @license    http://framework.zend.com/license/new-bsd     New BSD License
+ */
+class Zend_Gdata_MediaMimeStream
+{
+    /**
+     * A valid MIME boundary.
+     *
+     * @var string
+     */
+    protected $_boundaryString = null;
+
+    /**
+     * A handle to the file that is part of the message.
+     *
+     * @var resource
+     */
+    protected $_fileHandle = null;
+
+    /**
+     * The current part being read from.
+     *
+     * @var int
+     */
+    protected $_currentPart = 0;
+
+    /**
+     * The size of the MIME message.
+     *
+     * @var int
+     */
+    protected $_totalSize = 0;
+
+    /**
+     * An array of all the parts to be sent. Array members are either a
+     * MimeFile or a MimeBodyString object.
+     *
+     * @var array
+     */
+    protected $_parts = null;
+
+    /**
+     * Create a new MimeMediaStream object.
+     *
+     * @param string $xmlString       the string corresponding to the XML section
+     *                                of the message, typically an atom entry or feed
+     * @param string $filePath        the path to the file that constitutes the binary
+     *                                part of the message
+     * @param string $fileContentType the valid internet media type of the file
+     *
+     * @throws Zend_Gdata_App_IOException If the file cannot be read or does
+     *                                    not exist. Also if mbstring.func_overload has been set > 1.
+     */
+    public function __construct($xmlString = null, $filePath = null,
+        $fileContentType = null)
+    {
+        if (!file_exists($filePath) || !is_readable($filePath)) {
+            // require_once 'Zend/Gdata/App/IOException.php';
+            throw new Zend_Gdata_App_IOException('File to be uploaded at '.
+                $filePath.' does not exist or is not readable.');
+        }
+
+        $this->_fileHandle = fopen($filePath, 'rb', true);
+        $this->_boundaryString = '=_'.md5(microtime(1).rand(1, 20));
+        $entry = $this->wrapEntry($xmlString, $fileContentType);
+        $closingBoundary = new Zend_Gdata_MimeBodyString("\r\n--{$this->_boundaryString}--\r\n");
+        $file = new Zend_Gdata_MimeFile($this->_fileHandle);
+        $this->_parts = array($entry, $file, $closingBoundary);
+
+        $fileSize = filesize($filePath);
+        $this->_totalSize = $entry->getSize() + $fileSize
+          + $closingBoundary->getSize();
+    }
+
+    /**
+     * Sandwiches the entry body into a MIME message.
+     */
+    private function wrapEntry($entry, $fileMimeType)
+    {
+        $wrappedEntry = "--{$this->_boundaryString}\r\n";
+        $wrappedEntry .= "Content-Type: application/atom+xml\r\n\r\n";
+        $wrappedEntry .= $entry;
+        $wrappedEntry .= "\r\n--{$this->_boundaryString}\r\n";
+        $wrappedEntry .= "Content-Type: $fileMimeType\r\n\r\n";
+
+        return new Zend_Gdata_MimeBodyString($wrappedEntry);
+    }
+
+    /**
+     * Read a specific chunk of the the MIME multipart message.
+     *
+     * @param int $bufferSize the size of the chunk that is to be read,
+     *                        must be lower than MAX_BUFFER_SIZE
+     *
+     * @return string A corresponding piece of the message. This could be
+     *                binary or regular text.
+     */
+    public function read($bytesRequested)
+    {
+        if ($this->_currentPart >= count($this->_parts)) {
+            return false;
+        }
+
+        $activePart = $this->_parts[$this->_currentPart];
+        $buffer = $activePart->read($bytesRequested);
+
+        while (strlen($buffer) < $bytesRequested) {
+            ++$this->_currentPart;
+            $nextBuffer = $this->read($bytesRequested - strlen($buffer));
+            if (false === $nextBuffer) {
+                break;
+            }
+            $buffer .= $nextBuffer;
+        }
+
+        return $buffer;
+    }
+
+    /**
+     * Return the total size of the mime message.
+     *
+     * @return int total size of the message to be sent
+     */
+    public function getTotalSize()
+    {
+        return $this->_totalSize;
+    }
+
+    /**
+     * Close the internal file that we are streaming to the socket.
+     */
+    public function closeFileHandle()
+    {
+        if (null !== $this->_fileHandle) {
+            fclose($this->_fileHandle);
+        }
+    }
+
+    /**
+     * Return a Content-type header that includes the current boundary string.
+     *
+     * @return string a valid HTTP Content-Type header
+     */
+    public function getContentType()
+    {
+        return 'multipart/related;boundary="'.
+            $this->_boundaryString.'"'."\r\n";
+    }
+}
