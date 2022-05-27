@@ -1,5 +1,5 @@
 {
-	"name": "zendframework/zendframework1",
+	"name": "i3/zendframework1",
 	"type": "library",
 	"autoload": {
 		"psr-0": {
